@@ -132,12 +132,14 @@ async function computeAverageSpectrum(audio) {
   return db; // index k -> fréquence = k/half * nyquist
 }
 
-// Détection du cutoff : on part du haut du spectre et on descend jusqu'à
-// trouver là où l'énergie remonte durablement au-dessus d'un seuil de bruit.
+// Détection du cutoff basée sur le DÉCROCHAGE RELATIF, pas un seuil absolu.
+// Un lowpass laisse toujours un résidu au-dessus de la coupure ; un seuil de
+// bruit fixe le prend pour du signal. On détecte donc l'endroit où l'énergie
+// s'effondre durablement sous une bande de référence (le corps du signal).
 function detectCutoff(db, nyquist) {
   const half = db.length;
-  const floorDb = -75;                  // au-dessus = du vrai signal
-  // moyenne glissante pour lisser
+
+  // lissage
   const win = 8;
   const smooth = new Float64Array(half);
   for (let k = 0; k < half; k++) {
@@ -145,14 +147,31 @@ function detectCutoff(db, nyquist) {
     for (let j = Math.max(0, k - win); j <= Math.min(half - 1, k + win); j++) { s += db[j]; c++; }
     smooth[k] = s / c;
   }
-  // en partant du sommet des fréquences, on cherche le 1er bin (vers le bas)
-  // où l'énergie dépasse le seuil de façon soutenue
+
+  // Niveau de référence : médiane de la bande 1–6 kHz (le corps du morceau,
+  // toujours présent quel que soit l'encodage).
+  const binOf = f => Math.round(f / nyquist * half);
+  const refLo = binOf(1000), refHi = Math.min(half - 1, binOf(6000));
+  const refSlice = [];
+  for (let k = refLo; k <= refHi; k++) refSlice.push(smooth[k]);
+  refSlice.sort((a, b) => a - b);
+  const refLevel = refSlice[Math.floor(refSlice.length / 2)] || -20;
+
+  // Le cutoff = 1re fréquence (en montant depuis la réf) où l'énergie tombe
+  // durablement à plus de `drop` dB sous la référence et n'y remonte plus.
+  const drop = 22;                       // dB sous la réf = début de coupure (genou de la pente)
+  const thresh = refLevel - drop;
+  const need = binOf(400);               // ~400 Hz de chute soutenue pour valider
   let cutoffBin = half - 1;
-  const need = 12; // bins consécutifs au-dessus du seuil pour valider
-  let run = 0;
-  for (let k = half - 1; k >= 0; k--) {
-    if (smooth[k] > floorDb) { run++; if (run >= need) { cutoffBin = k; break; } }
-    else run = 0;
+  let run = 0, firstBelow = -1;
+  for (let k = refHi; k < half; k++) {
+    if (smooth[k] < thresh) {
+      if (run === 0) firstBelow = k;
+      run++;
+      if (run >= need) { cutoffBin = firstBelow; break; }
+    } else {
+      run = 0; firstBelow = -1;
+    }
   }
   return (cutoffBin / half) * nyquist; // Hz
 }
@@ -238,7 +257,7 @@ function fillResult(card, r) {
     <div class="scale"><span>Basse qualité</span><span>Lossy HQ</span><span>Full quality</span></div>
 
     <div class="stats">
-      <div class="stat"><div class="k">Coupure spectrale</div><div class="v">${verdict.cutoffKHz.toFixed(1)} kHz</div></div>
+      <div class="stat"><div class="k">Coupure spectrale (est.)</div><div class="v">≈ ${verdict.cutoffKHz.toFixed(1)} kHz</div></div>
       <div class="stat"><div class="k">Source probable</div><div class="v" style="font-size:14px">${verdict.likely}</div></div>
       <div class="stat"><div class="k">Fréq. max théorique</div><div class="v">${(nyquist/1000).toFixed(1)} kHz</div></div>
     </div>
