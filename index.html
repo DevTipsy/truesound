@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TrueSound — Analyseur de qualité audio réelle</title>
+<style>
+  :root {
+    --bg: #0d0f14;
+    --panel: #161a22;
+    --panel-2: #1e232d;
+    --text: #e8ebf0;
+    --muted: #8a92a3;
+    --border: #2a303c;
+    --accent: #5b8def;
+    --red: #e5484d;
+    --orange: #f5a623;
+    --green: #30a46c;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 24px 16px 64px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 8px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  h1 .dot { color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 15px; margin-top: 6px; }
+  .privacy {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-top: 14px; font-size: 13px; color: var(--green);
+    background: rgba(48,163,108,0.1); padding: 5px 12px; border-radius: 999px;
+  }
+
+  .dropzone {
+    margin-top: 28px;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    padding: 48px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: var(--panel-2); }
+  .dropzone .icon { font-size: 34px; margin-bottom: 10px; }
+  .dropzone .big { font-size: 16px; font-weight: 600; }
+  .dropzone .small { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  input[type=file] { display: none; }
+
+  .results { margin-top: 28px; display: flex; flex-direction: column; gap: 18px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  .fname { font-weight: 600; font-size: 15px; word-break: break-all; }
+  .fmeta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+  .verdict { display: flex; align-items: center; gap: 12px; margin: 14px 0 6px; }
+  .badge {
+    font-weight: 700; font-size: 14px; padding: 5px 12px; border-radius: 8px;
+    color: #fff; white-space: nowrap;
+  }
+  .badge.red { background: var(--red); }
+  .badge.orange { background: var(--orange); color:#231a06; }
+  .badge.green { background: var(--green); }
+  .verdict-text { font-size: 14px; color: var(--text); }
+
+  .bar { position: relative; height: 12px; border-radius: 999px; overflow: hidden; margin: 16px 0 6px;
+    background: linear-gradient(90deg, var(--red) 0%, var(--red) 33%, var(--orange) 33%, var(--orange) 66%, var(--green) 66%, var(--green) 100%); }
+  .bar .marker {
+    position: absolute; top: -4px; width: 4px; height: 20px; border-radius: 2px;
+    background: #fff; box-shadow: 0 0 0 2px rgba(0,0,0,.4); transition: left .4s ease;
+  }
+  .scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap: 10px; margin-top: 16px; }
+  .stat { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-size: 16px; font-weight: 600; margin-top: 2px; }
+
+  canvas { width: 100%; height: 130px; margin-top: 16px; border-radius: 10px; background: #000; display:block; }
+  .spec-label { font-size: 11px; color: var(--muted); margin-top: 6px; text-align:center; }
+
+  .status { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .err { color: var(--red); font-size: 13px; margin-top: 8px; }
+
+  footer { margin-top: 40px; text-align: center; color: var(--muted); font-size: 12px; line-height:1.7; }
+  footer code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>TrueSound<span class="dot">.</span></h1>
+    <p class="subtitle">La vraie qualité d'un fichier audio — pas ce que dit son étiquette.</p>
+    <div class="privacy">🔒 Analyse 100&nbsp;% locale — aucun fichier n'est envoyé sur un serveur</div>
+  </header>
+
+  <label class="dropzone" id="drop">
+    <div class="icon">🎵</div>
+    <div class="big">Dépose un ou plusieurs fichiers, ou clique pour choisir</div>
+    <div class="small">FLAC, WAV, ALAC, M4A, MP3, AAC, OGG… — analysés dans ton navigateur</div>
+    <input type="file" id="file" accept="audio/*,.flac,.wav,.m4a,.mp3,.aac,.ogg,.opus" multiple>
+  </label>
+
+  <div class="results" id="results"></div>
+
+  <footer>
+    TrueSound détecte le <strong>mur de coupure spectral</strong> (lowpass) : un vrai lossless garde de l'énergie jusqu'à ~20&nbsp;kHz,
+    un MP3&nbsp;320 coupe vers ~20&nbsp;kHz, un MP3&nbsp;128 vers ~16&nbsp;kHz.<br>
+    Un fichier <code>.flac</code> qui coupe bas est un lossy déguisé (upsample).
+  </footer>
+</div>
+
+<script src="analyzer.js"></script>
+</body>
+</html>
