@@ -202,8 +202,11 @@ function highBandLevel(db, nyquist) {
 function classify(cutoff, nyquist, file, audio, hf) {
   const kHz = cutoff / 1000;
   const ext = (file.name.split('.').pop() || '').toLowerCase();
+  // Formats qui GARANTISSENT le sans-perte. .m4a en est EXCLU : un .m4a est le
+  // plus souvent de l'AAC lossy (cas normal et honnête), parfois de l'ALAC.
+  // On ne peut donc pas crier "le conteneur ment" sur un .m4a.
   const losslessExt = ['flac', 'wav', 'alac', 'aiff', 'aif'];
-  const claimsLossless = losslessExt.includes(ext) || ext === 'm4a';
+  const claimsLossless = losslessExt.includes(ext);
 
   // Si le sample rate ne permet pas de voir au-dessus de 20 kHz, on ne peut
   // pas juger le lossless (Nyquist trop bas).
@@ -211,8 +214,8 @@ function classify(cutoff, nyquist, file, audio, hf) {
 
   let color, label, detail, likely, score;
 
-  const richTop = hf > -16;   // énergie haute-bande quasi intacte -> lossless
-  const someTop = hf > -25;   // partiellement présente -> lossy haut débit
+  const richTop = hf > -16;   // haute-bande quasi intacte -> lossless
+  const someTop = hf > -25;   // partiellement présente -> lossy très haut débit
 
   if (canJudgeTop && richTop && kHz >= 20) {
     color = 'green';
@@ -221,17 +224,23 @@ function classify(cutoff, nyquist, file, audio, hf) {
     detail = `Énergie présente jusqu'en haut du spectre (${kHz.toFixed(1)} kHz) — non tronqué.`;
     score = 0.86 + Math.min(0.12, (hf + 16) / 40);
   } else if (someTop && kHz >= 19) {
+    color = 'green';
+    label = 'Très bon (lossy premium)';
+    likely = 'MP3 320 / AAC 256 (proche du transparent)';
+    detail = `Coupure vers ${kHz.toFixed(1)} kHz, haute-bande encore présente — lossy de très haute qualité, quasi indistinguable à l'oreille.`;
+    score = 0.72 + Math.min(0.1, (hf + 25) / 90);
+  } else if (kHz >= 17.5) {
     color = 'orange';
-    label = 'Bon (lossy haut débit)';
-    likely = 'MP3 320 kbps / AAC ~256';
-    detail = `Coupure vers ${kHz.toFixed(1)} kHz mais haute-bande affaiblie — encodage lossy de bonne qualité.`;
-    score = 0.55 + Math.min(0.15, (hf + 25) / 60);
+    label = 'Bon (AAC/MP3 ~256)';
+    likely = 'AAC 256 kbps / MP3 256 (ex. iTunes Store, Apple Music)';
+    detail = `Coupure vers ${kHz.toFixed(1)} kHz — encodage lossy de bonne qualité (typique d'un achat AAC).`;
+    score = 0.55 + (kHz - 17.5) / 1.5 * 0.12;
   } else if (kHz >= 15.5) {
     color = 'orange';
     label = 'Moyen';
-    likely = 'MP3 ~192 kbps';
+    likely = 'MP3 / AAC ~192 kbps';
     detail = `Spectre appauvri au-delà de ${kHz.toFixed(1)} kHz — qualité intermédiaire.`;
-    score = 0.38 + (kHz - 15.5) / 3 * 0.1;
+    score = 0.38 + (kHz - 15.5) / 2 * 0.1;
   } else {
     color = 'red';
     label = 'Basse qualité';
@@ -240,7 +249,8 @@ function classify(cutoff, nyquist, file, audio, hf) {
     score = Math.max(0.05, Math.min(0.3, kHz / 16 * 0.3));
   }
 
-  // Alerte "faux lossless" : conteneur sans perte mais spectre de lossy.
+  // Alerte "faux lossless" : conteneur SANS PERTE (flac/wav/alac) mais spectre
+  // de lossy. Ne concerne jamais un .m4a (voir plus haut).
   let warning = null;
   if (claimsLossless && canJudgeTop && !richTop) {
     warning = `⚠️ Fichier .${ext} annoncé sans perte, mais la haute-bande est effondrée `
