@@ -4,3 +4,6 @@
 # Éditeurs
 .vscode/
 .idea/
+
+# Fichiers de test générés
+samples/

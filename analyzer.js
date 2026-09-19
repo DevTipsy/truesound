@@ -80,7 +80,8 @@ async function analyzeFile(file) {
     ctx.close();
 
     const cutoff = detectCutoff(spectrum, nyquist);
-    const verdict = classify(cutoff, nyquist, file, audio);
+    const hf = highBandLevel(spectrum, nyquist); // énergie 18–22 kHz vs corps du signal (dB)
+    const verdict = classify(cutoff, nyquist, file, audio, hf);
 
     fillResult(card, { file, audio, sampleRate, nyquist, cutoff, verdict, spectrum });
   } catch (err) {
@@ -176,51 +177,83 @@ function detectCutoff(db, nyquist) {
   return (cutoffBin / half) * nyquist; // Hz
 }
 
-// Classification -> score 0..1 (position barre) + libellé + couleur
-function classify(cutoff, nyquist, file, audio) {
+// Énergie moyenne de la bande haute (18–22 kHz) relative au corps du signal
+// (1–6 kHz), en dB. C'est LE discriminant fiable : un vrai lossless garde de
+// l'énergie tout en haut (~ -10 dB), un lossy s'y effondre (< -25 dB), même
+// quand son cutoff apparent reste haut.
+function highBandLevel(db, nyquist) {
+  const half = db.length;
+  const bin = f => Math.round(f / nyquist * half);
+  const band = (lo, hi) => {
+    let s = 0, c = 0;
+    for (let k = bin(lo); k <= bin(hi) && k < half; k++) { s += db[k]; c++; }
+    return c ? s / c : -120;
+  };
+  const ref = band(1000, 6000);
+  const topHi = Math.min(22000, nyquist - 500);
+  const top = band(18000, topHi);
+  return top - ref; // dB sous la réf (valeur négative)
+}
+
+// Classification -> score 0..1 (position barre) + libellé + couleur.
+// Combine DEUX mesures : le cutoff (où le spectre s'arrête) ET l'énergie
+// haute-bande hf (combien reste en 18–22 kHz). hf tranche lossless vs lossy ;
+// le cutoff affine le débit lossy probable.
+function classify(cutoff, nyquist, file, audio, hf) {
   const kHz = cutoff / 1000;
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   const losslessExt = ['flac', 'wav', 'alac', 'aiff', 'aif'];
-  const claimsLossless = losslessExt.includes(ext) ||
-    (ext === 'm4a'); // m4a peut être ALAC ou AAC — on tranche via le spectre
+  const claimsLossless = losslessExt.includes(ext) || ext === 'm4a';
+
+  // Si le sample rate ne permet pas de voir au-dessus de 20 kHz, on ne peut
+  // pas juger le lossless (Nyquist trop bas).
+  const canJudgeTop = nyquist >= 21000;
 
   let color, label, detail, likely, score;
 
-  if (kHz >= 20) {
+  const richTop = hf > -16;   // énergie haute-bande quasi intacte -> lossless
+  const someTop = hf > -25;   // partiellement présente -> lossy haut débit
+
+  if (canJudgeTop && richTop && kHz >= 20) {
     color = 'green';
     label = 'Full quality';
     likely = 'Lossless (ou proche du maximum)';
-    detail = `Énergie présente jusqu'à ${kHz.toFixed(1)} kHz — spectre non tronqué.`;
-    score = 0.83 + Math.min(0.15, (kHz - 20) / 10);
-  } else if (kHz >= 18.5) {
+    detail = `Énergie présente jusqu'en haut du spectre (${kHz.toFixed(1)} kHz) — non tronqué.`;
+    score = 0.86 + Math.min(0.12, (hf + 16) / 40);
+  } else if (someTop && kHz >= 19) {
     color = 'orange';
-    label = 'Bon (proche MP3 320)';
-    likely = 'MP3 320 kbps / AAC haut débit';
-    detail = `Coupure vers ${kHz.toFixed(1)} kHz — typique d'un encodage lossy de haute qualité.`;
-    score = 0.42 + (kHz - 18.5) / 1.5 * 0.2;
+    label = 'Bon (lossy haut débit)';
+    likely = 'MP3 320 kbps / AAC ~256';
+    detail = `Coupure vers ${kHz.toFixed(1)} kHz mais haute-bande affaiblie — encodage lossy de bonne qualité.`;
+    score = 0.55 + Math.min(0.15, (hf + 25) / 60);
   } else if (kHz >= 15.5) {
     color = 'orange';
     label = 'Moyen';
     likely = 'MP3 ~192 kbps';
-    detail = `Coupure vers ${kHz.toFixed(1)} kHz — qualité intermédiaire.`;
-    score = 0.34 + (kHz - 15.5) / 3 * 0.08;
+    detail = `Spectre appauvri au-delà de ${kHz.toFixed(1)} kHz — qualité intermédiaire.`;
+    score = 0.38 + (kHz - 15.5) / 3 * 0.1;
   } else {
     color = 'red';
     label = 'Basse qualité';
     likely = kHz >= 14 ? 'MP3 ~128 kbps' : 'MP3 ≤128 kbps / source dégradée';
-    detail = `Coupure vers ${kHz.toFixed(1)} kHz — nettement lossy.`;
+    detail = `Coupure nette vers ${kHz.toFixed(1)} kHz — nettement lossy.`;
     score = Math.max(0.05, Math.min(0.3, kHz / 16 * 0.3));
   }
 
-  // Alerte "faux lossless" : conteneur lossless mais spectre tronqué
+  // Alerte "faux lossless" : conteneur sans perte mais spectre de lossy.
   let warning = null;
-  if (claimsLossless && kHz < 20) {
-    warning = `⚠️ Fichier .${ext} annoncé sans perte, mais le spectre est coupé à ${kHz.toFixed(1)} kHz : `
+  if (claimsLossless && canJudgeTop && !richTop) {
+    warning = `⚠️ Fichier .${ext} annoncé sans perte, mais la haute-bande est effondrée `
+      + `(${hf.toFixed(0)} dB sous le corps du signal, coupure ≈ ${kHz.toFixed(1)} kHz) : `
       + `c'est très probablement un lossy (${likely}) ré-encapsulé. Le conteneur ment.`;
-    if (color === 'green') { color = 'orange'; }
+    if (color === 'green') color = 'orange';
   }
 
-  return { color, label, detail, likely, score: Math.max(0, Math.min(1, score)), warning, cutoffKHz: kHz };
+  if (!canJudgeTop) {
+    detail += ` (Nyquist à ${(nyquist/1000).toFixed(1)} kHz : impossible de vérifier au-delà.)`;
+  }
+
+  return { color, label, detail, likely, hf, score: Math.max(0, Math.min(1, score)), warning, cutoffKHz: kHz };
 }
 
 // --- Rendu --------------------------------------------------------------
@@ -258,6 +291,7 @@ function fillResult(card, r) {
 
     <div class="stats">
       <div class="stat"><div class="k">Coupure spectrale (est.)</div><div class="v">≈ ${verdict.cutoffKHz.toFixed(1)} kHz</div></div>
+      <div class="stat"><div class="k">Énergie 18–22 kHz</div><div class="v">${verdict.hf.toFixed(0)} dB</div></div>
       <div class="stat"><div class="k">Source probable</div><div class="v" style="font-size:14px">${verdict.likely}</div></div>
       <div class="stat"><div class="k">Fréq. max théorique</div><div class="v">${(nyquist/1000).toFixed(1)} kHz</div></div>
     </div>
