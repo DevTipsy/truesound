@@ -60,8 +60,12 @@ async function analyzeFile(file) {
   };
 
   try {
-    set('Décodage…');
+    set('Lecture des métadonnées…');
     const buf = await file.arrayBuffer();
+    const meta = (typeof readMetadata === 'function')
+      ? safe(() => readMetadata(buf, file.name)) : { unknown: true };
+
+    set('Décodage…');
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC();
     let audio;
@@ -80,10 +84,11 @@ async function analyzeFile(file) {
     ctx.close();
 
     const cutoff = detectCutoff(spectrum, nyquist);
-    const hf = highBandLevel(spectrum, nyquist); // énergie 18–22 kHz vs corps du signal (dB)
-    const verdict = classify(cutoff, nyquist, file, audio, hf);
+    const hf = highBandLevel(spectrum, nyquist);          // énergie 18–22 kHz vs corps (dB)
+    const wall = wallSteepness(spectrum, nyquist, cutoff); // {dropDb, atHz} : mur artificiel ?
+    const verdict = classify(cutoff, nyquist, file, audio, hf, wall, meta);
 
-    fillResult(card, { file, audio, sampleRate, nyquist, cutoff, verdict, spectrum });
+    fillResult(card, { file, audio, sampleRate, nyquist, cutoff, verdict, spectrum, meta });
   } catch (err) {
     console.error(err);
     set('Erreur : ' + err.message, 'err');
@@ -195,76 +200,135 @@ function highBandLevel(db, nyquist) {
   return top - ref; // dB sous la réf (valeur négative)
 }
 
-// Classification -> score 0..1 (position barre) + libellé + couleur.
-// Combine DEUX mesures : le cutoff (où le spectre s'arrête) ET l'énergie
-// haute-bande hf (combien reste en 18–22 kHz). hf tranche lossless vs lossy ;
-// le cutoff affine le débit lossy probable.
-function classify(cutoff, nyquist, file, audio, hf) {
-  const kHz = cutoff / 1000;
-  const ext = (file.name.split('.').pop() || '').toLowerCase();
-  // Formats qui GARANTISSENT le sans-perte. .m4a en est EXCLU : un .m4a est le
-  // plus souvent de l'AAC lossy (cas normal et honnête), parfois de l'ALAC.
-  // On ne peut donc pas crier "le conteneur ment" sur un .m4a.
-  const losslessExt = ['flac', 'wav', 'alac', 'aiff', 'aif'];
-  const claimsLossless = losslessExt.includes(ext);
-
-  // Si le sample rate ne permet pas de voir au-dessus de 20 kHz, on ne peut
-  // pas juger le lossless (Nyquist trop bas).
-  const canJudgeTop = nyquist >= 21000;
-
-  let color, label, detail, likely, score;
-
-  const richTop = hf > -16;   // haute-bande quasi intacte -> lossless
-  const someTop = hf > -25;   // partiellement présente -> lossy très haut débit
-
-  if (canJudgeTop && richTop && kHz >= 20) {
-    color = 'green';
-    label = 'Full quality';
-    likely = 'Lossless (ou proche du maximum)';
-    detail = `Énergie présente jusqu'en haut du spectre (${kHz.toFixed(1)} kHz) — non tronqué.`;
-    score = 0.86 + Math.min(0.12, (hf + 16) / 40);
-  } else if (someTop && kHz >= 19) {
-    color = 'green';
-    label = 'Très bon (lossy premium)';
-    likely = 'MP3 320 / AAC 256 (proche du transparent)';
-    detail = `Coupure vers ${kHz.toFixed(1)} kHz, haute-bande encore présente — lossy de très haute qualité, quasi indistinguable à l'oreille.`;
-    score = 0.72 + Math.min(0.1, (hf + 25) / 90);
-  } else if (kHz >= 17.5) {
-    color = 'orange';
-    label = 'Bon (AAC/MP3 ~256)';
-    likely = 'AAC 256 kbps / MP3 256 (ex. iTunes Store, Apple Music)';
-    detail = `Coupure vers ${kHz.toFixed(1)} kHz — encodage lossy de bonne qualité (typique d'un achat AAC).`;
-    score = 0.55 + (kHz - 17.5) / 1.5 * 0.12;
-  } else if (kHz >= 15.5) {
-    color = 'orange';
-    label = 'Moyen';
-    likely = 'MP3 / AAC ~192 kbps';
-    detail = `Spectre appauvri au-delà de ${kHz.toFixed(1)} kHz — qualité intermédiaire.`;
-    score = 0.38 + (kHz - 15.5) / 2 * 0.1;
-  } else {
-    color = 'red';
-    label = 'Basse qualité';
-    likely = kHz >= 14 ? 'MP3 ~128 kbps' : 'MP3 ≤128 kbps / source dégradée';
-    detail = `Coupure nette vers ${kHz.toFixed(1)} kHz — nettement lossy.`;
-    score = Math.max(0.05, Math.min(0.3, kHz / 16 * 0.3));
+// Raideur du "mur" au point de coupure. UN VRAI DISCRIMINANT du lossy :
+// un encodeur pose un lowpass qui crée une FALAISE (chute brutale sur ~1 kHz),
+// alors que le contenu naturel décline en pente douce. On renvoie la plus
+// forte chute d'énergie (dB) sur une fenêtre glissante de ~1,2 kHz au-dessus
+// de 13 kHz, et la fréquence où elle se produit.
+function wallSteepness(db, nyquist, cutoffHz) {
+  const half = db.length;
+  const bin = f => Math.round(f / nyquist * half);
+  // lissage léger pour ne pas compter le bruit bin-à-bin
+  const win = 4;
+  const sm = new Float64Array(half);
+  for (let k = 0; k < half; k++) {
+    let s = 0, c = 0;
+    for (let j = Math.max(0, k - win); j <= Math.min(half - 1, k + win); j++) { s += db[j]; c++; }
+    sm[k] = s / c;
   }
-
-  // Alerte "faux lossless" : conteneur SANS PERTE (flac/wav/alac) mais spectre
-  // de lossy. Ne concerne jamais un .m4a (voir plus haut).
-  let warning = null;
-  if (claimsLossless && canJudgeTop && !richTop) {
-    warning = `⚠️ Fichier .${ext} annoncé sans perte, mais la haute-bande est effondrée `
-      + `(${hf.toFixed(0)} dB sous le corps du signal, coupure ≈ ${kHz.toFixed(1)} kHz) : `
-      + `c'est très probablement un lossy (${likely}) ré-encapsulé. Le conteneur ment.`;
-    if (color === 'green') color = 'orange';
+  const span = bin(1200) - bin(0);       // ~1,2 kHz en bins
+  const from = bin(13000);
+  // On s'arrête BIEN AVANT Nyquist : la chute terminale du spectre (fin de la
+  // bande) n'est pas un mur d'encodeur et créerait un faux positif. Un vrai
+  // lowpass lossy est à ≤ ~20,5 kHz. On plafonne donc la fin de recherche.
+  const to = Math.min(half - 1, bin(Math.min(nyquist - 2500, 20500)));
+  let maxDrop = 0, atHz = cutoffHz;
+  for (let k = from; k + span <= to; k++) {
+    const drop = sm[k] - sm[k + span];   // positif = ça descend
+    if (drop > maxDrop) { maxDrop = drop; atHz = ((k + span / 2) / half) * nyquist; }
   }
-
-  if (!canJudgeTop) {
-    detail += ` (Nyquist à ${(nyquist/1000).toFixed(1)} kHz : impossible de vérifier au-delà.)`;
-  }
-
-  return { color, label, detail, likely, hf, score: Math.max(0, Math.min(1, score)), warning, cutoffKHz: kHz };
+  return { dropDb: maxDrop, atHz };      // dropDb élevé (>~28) = mur artificiel
 }
+
+// Classification pilotée par les MÉTADONNÉES (codec déclaré = vérité), le
+// spectre servant de détecteur de mensonge :
+//  - codec lossless (PCM/FLAC/ALAC) + mur d'encodeur => FAUX lossless démasqué.
+//  - codec lossless + pas de mur => vrai lossless confirmé (vert).
+//  - codec lossy (MP3/AAC) => verdict selon le débit lu ; le spectre illustre.
+// Le mur (drop>=28 dB sur ~1,2 kHz) est la seule PREUVE spectrale de lossy ;
+// on n'accuse jamais sur un simple manque d'aigus (qui dépend du contenu).
+function classify(cutoff, nyquist, file, audio, hf, wall, meta) {
+  const kHz = cutoff / 1000;
+  const wallK = wall.atHz / 1000, drop = wall.dropDb;
+  const hasWall = drop >= 28 && wallK < 20.5;
+  meta = meta || { unknown: true };
+
+  let color, label, detail, likely, score, warning = null;
+
+  const bitrateNote = meta.bitrateKbps ? ` ${meta.bitrateKbps} kbps` : '';
+  const srNote = meta.sampleRate ? `${(meta.sampleRate/1000).toFixed(1)} kHz` : '';
+
+  if (meta.lossless) {
+    // Le fichier PRÉTEND être sans perte. Le spectre tranche.
+    if (hasWall) {
+      // Mensonge démasqué : un lossy ré-encapsulé.
+      color = 'red';
+      label = 'Faux lossless';
+      likely = `Lossy ré-encapsulé (mur à ${wallK.toFixed(1)} kHz)`;
+      detail = `Déclaré ${meta.codec}${meta.bits ? ' ' + meta.bits + '-bit' : ''}, mais le spectre montre un mur d'encodeur à ${wallK.toFixed(1)} kHz.`;
+      score = Math.max(0.1, Math.min(0.35, wallK / 20 * 0.4));
+      warning = `⚠️ Fichier ${meta.container} annoncé sans perte (${meta.codec}), mais on détecte `
+        + `un mur d'encodeur à ${wallK.toFixed(1)} kHz (chute de ${drop.toFixed(0)} dB) : `
+        + `c'est un lossy ré-encapsulé. Le conteneur ment.`;
+    } else if (hf > -32 && kHz >= 19.5) {
+      // Vrai lossless confirmé : aigus riches ET spectre plein jusqu'en haut.
+      color = 'green';
+      label = 'Lossless vérifié';
+      likely = `${meta.codec}${meta.bits ? ' ' + meta.bits + '-bit' : ''}${srNote ? ' / ' + srNote : ''}`;
+      detail = `${meta.codec} sans perte — aigus présents jusqu'en haut du spectre, aucun mur d'encodeur. Cohérent avec du vrai sans-perte.`;
+      score = 0.94;
+    } else {
+      // Lossless déclaré, pas de mur, mais peu d'aigus : cas AMBIGU. Le fichier
+      // est peut-être un vrai enregistrement sombre, ou un vieux transcodage
+      // sans mur franc. On ne peut pas être catégorique.
+      color = 'green';
+      label = 'Lossless (aigus limités)';
+      likely = `${meta.codec}${meta.bits ? ' ' + meta.bits + '-bit' : ''}${srNote ? ' / ' + srNote : ''}`;
+      detail = `Déclaré ${meta.codec} sans perte et aucun mur d'encodeur franc — mais le spectre s'arrête vers ${kHz.toFixed(1)} kHz. `
+        + `Soit un enregistrement naturellement peu aigu, soit une source lossy ancienne : non concluant côté spectre.`;
+      score = 0.78;
+    }
+  } else if (meta.unknown) {
+    // Pas de métadonnées : on retombe sur le seul spectre (mode dégradé).
+    if (hasWall) {
+      color = wallK >= 19.5 ? 'orange' : 'red';
+      label = wallK >= 19.5 ? 'Lossy (haut débit)' : 'Lossy';
+      likely = `Mur à ${wallK.toFixed(1)} kHz`;
+      detail = `Format non identifié ; le spectre montre un mur d'encodeur à ${wallK.toFixed(1)} kHz.`;
+      score = wallK >= 19.5 ? 0.6 : 0.35;
+    } else {
+      color = 'orange'; label = 'Indéterminé';
+      likely = 'Format non reconnu';
+      detail = `Impossible de lire les métadonnées et aucun mur franc au spectre — verdict impossible.`;
+      score = 0.55;
+    }
+  } else {
+    // Codec LOSSY connu (MP3, AAC…). Verdict selon le débit.
+    const br = meta.bitrateKbps;
+    likely = `${meta.codec}${bitrateNote}`;
+    if (meta.codec.startsWith('AAC')) {
+      // AAC : très efficace ; 256 = quasi transparent.
+      color = 'orange'; label = 'Bon (AAC lossy)';
+      detail = `AAC avec perte (ex. achat iTunes / Apple Music). Bonne qualité, mais ce n'est pas du sans-perte.`;
+      score = 0.6;
+    } else if (br && br >= 320) {
+      color = 'orange'; label = 'Très bon (MP3 320)';
+      detail = `MP3 320 kbps — haut de gamme du lossy, quasi transparent, mais avec perte.`;
+      score = 0.62;
+    } else if (br && br >= 256) {
+      color = 'orange'; label = 'Bon (MP3 256)';
+      detail = `MP3 ${br} kbps — bonne qualité lossy.`;
+      score = 0.55;
+    } else if (br && br >= 192) {
+      color = 'orange'; label = 'Moyen';
+      detail = `MP3 ${br} kbps — qualité intermédiaire.`;
+      score = 0.42;
+    } else if (br && br >= 160) {
+      color = 'orange'; label = 'Moyen–bas';
+      detail = `MP3 ${br} kbps — audible sur du bon matériel.`;
+      score = 0.34;
+    } else {
+      color = 'red'; label = 'Basse qualité';
+      detail = `${meta.codec}${bitrateNote} — nettement dégradé.`;
+      score = Math.max(0.08, Math.min(0.3, (br || 128) / 320 * 0.3));
+    }
+  }
+
+  return { color, label, detail, likely, hf, wallK, wallDrop: drop, hasWall, meta,
+           score: Math.max(0, Math.min(1, score)), warning, cutoffKHz: kHz };
+}
+
+function safe(fn) { try { return fn(); } catch (e) { return { unknown: true }; } }
 
 // --- Rendu --------------------------------------------------------------
 function renderCard(file) {
@@ -281,8 +345,11 @@ function renderCard(file) {
 }
 
 function fillResult(card, r) {
-  const { verdict, cutoff, nyquist, sampleRate, audio, spectrum, file } = r;
+  const { verdict, cutoff, nyquist, sampleRate, audio, spectrum, file, meta } = r;
   const pct = (verdict.score * 100).toFixed(0);
+  const m = meta || {};
+  const codecStr = m.unknown ? 'non lu' : (m.codec || m.container || '—');
+  const wallStr = verdict.hasWall ? `mur ${verdict.wallK.toFixed(1)} kHz` : 'aucun mur';
   card.innerHTML = `
     <div class="card-head">
       <div class="fname">${escapeHtml(file.name)}</div>
@@ -297,19 +364,20 @@ function fillResult(card, r) {
     ${verdict.warning ? `<div class="err" style="margin-top:10px">${verdict.warning}</div>` : ''}
 
     <div class="bar"><div class="marker" style="left:calc(${pct}% - 2px)"></div></div>
-    <div class="scale"><span>Basse qualité</span><span>Lossy HQ</span><span>Full quality</span></div>
+    <div class="scale"><span>Basse qualité</span><span>Lossy</span><span>Lossless</span></div>
 
     <div class="stats">
-      <div class="stat"><div class="k">Coupure spectrale (est.)</div><div class="v">≈ ${verdict.cutoffKHz.toFixed(1)} kHz</div></div>
-      <div class="stat"><div class="k">Énergie 18–22 kHz</div><div class="v">${verdict.hf.toFixed(0)} dB</div></div>
-      <div class="stat"><div class="k">Source probable</div><div class="v" style="font-size:14px">${verdict.likely}</div></div>
+      <div class="stat"><div class="k">Codec déclaré</div><div class="v" style="font-size:15px">${escapeHtml(codecStr)}${m.bitrateKbps ? ' · ' + m.bitrateKbps + 'k' : ''}</div></div>
+      <div class="stat"><div class="k">Sans perte ?</div><div class="v" style="font-size:15px">${m.unknown ? '?' : (m.lossless ? (verdict.hasWall ? '⚠️ prétendu' : '✅ oui') : '❌ non')}</div></div>
+      <div class="stat"><div class="k">Preuve spectrale</div><div class="v" style="font-size:15px">${wallStr}</div></div>
       <div class="stat"><div class="k">Fréq. max théorique</div><div class="v">${(nyquist/1000).toFixed(1)} kHz</div></div>
     </div>
 
     <canvas class="spec" width="800" height="130"></canvas>
-    <div class="spec-label">Spectre moyen (dB) — de 0 à ${(nyquist/1000).toFixed(0)} kHz · la ligne blanche = cutoff détecté</div>
+    <div class="spec-label">Spectre moyen (dB) — de 0 à ${(nyquist/1000).toFixed(0)} kHz · pointillés blancs = mur d'encodeur détecté</div>
   `;
-  drawSpectrum(card.querySelector('.spec'), spectrum, nyquist, cutoff, verdict.color);
+  drawSpectrum(card.querySelector('.spec'), spectrum, nyquist,
+               verdict.hasWall ? verdict.wallK * 1000 : cutoff, verdict.color);
 }
 
 function drawSpectrum(canvas, db, nyquist, cutoff, color) {

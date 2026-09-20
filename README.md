@@ -24,14 +24,33 @@ TrueSound lève une alerte **« faux lossless »**.
 
 ## Fonctionnement technique
 
-- Décodage PCM via la **Web Audio API** (`decodeAudioData`).
-- **FFT** maison (radix-2) sur des fenêtres de Hann réparties dans tout le morceau,
-  spectre de magnitude moyenné puis converti en dB normalisés.
-- Détection du cutoff : on descend depuis Nyquist jusqu'au premier palier
-  d'énergie soutenue au-dessus du plancher de bruit.
-- Verdict → barre rouge/orange/vert + mini-graphe du spectre avec la ligne de cutoff.
+TrueSound croise **deux sources** :
 
-Aucune dépendance, aucun build : c'est du HTML + JS statique.
+**1. Les métadonnées réelles** (`metadata.js`) — parsing des en-têtes sans
+dépendance : WAV (chunk `fmt`), FLAC (STREAMINFO), MP4/M4A (atomes `mp4a`/`alac`),
+MP3 (frame header + tag Xing/LAME), OGG. On en tire le **codec** et le **débit**
+déclarés — la vérité sur ce que le fichier *prétend* être.
+
+**2. Le spectre** (`analyzer.js`) — décodage PCM via **Web Audio API**, **FFT**
+maison (radix-2) sur des fenêtres de Hann réparties dans le morceau, spectre
+moyenné en dB. On y cherche le **mur d'encodeur** : une chute franche (≥ 28 dB
+sur ~1,2 kHz) qui ne peut venir que d'un lowpass de compression lossy.
+
+**La combinaison fait la fiabilité :**
+- codec lossless (PCM/FLAC/ALAC) **+ mur** → *faux lossless démasqué*.
+- codec lossless **+ pas de mur + aigus riches** → *lossless vérifié* (vert).
+- codec lossless **+ pas de mur mais peu d'aigus** → *non concluant* (honnête).
+- codec lossy (MP3/AAC) → verdict selon le débit lu.
+
+### Limites connues (assumées)
+
+- L'**AAC** de bonne qualité (Apple/iTunes) ne laisse **pas** de mur spectral
+  exploitable : impossible de le distinguer d'un lossless par le seul spectre.
+  → c'est justement pourquoi on lit les métadonnées.
+- On ne peut jamais *prouver* le lossless au spectre, seulement l'absence de
+  signe de lossy. Le verdict reste prudent sur les cas ambigus.
+
+Aucune dépendance, aucun build : HTML + JS statique.
 
 ## Lancer en local
 
