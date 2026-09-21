@@ -108,20 +108,49 @@ function findChunk(b, start, id) {
   return -1;
 }
 
-// MP4 : on cherche récursivement les atomes; les codecs sont des "sample
-// entries" dans stsd (mp4a, alac, ...). On scanne simplement les 4cc connus.
+// MP4 : parcours de l'arbre d'atomes jusqu'à la sample entry (mp4a/alac…)
+// dans moov/trak/mdia/minf/stbl/stsd. Le codec 4cc apparaît juste après
+// l'en-tête stsd. L'atome moov peut être en fin de fichier, donc on parcourt
+// tout, pas seulement le début.
 function findMp4Codec(b) {
-  for (const cc of ['alac', 'mp4a', 'ac-3', 'ec-3']) {
-    if (indexOfAscii(b, cc, 0, Math.min(b.length, 200000)) >= 0) {
-      // alac prime sur mp4a : un fichier ALAC contient les deux 4cc parfois,
-      // mais 'alac' comme sample entry signe le lossless.
-      if (cc === 'alac') return 'alac';
-    }
+  const stsd = findAtom(b, 0, b.length, 'stsd');
+  if (stsd >= 0) {
+    // stsd : [size4][type4][version+flags 4][entryCount 4] puis 1re entrée :
+    // [size4][format 4cc] -> le 4cc est à stsd+16
+    const cc = ascii(b, stsd + 16, 4);
+    if (['alac', 'mp4a', 'ac-3', 'ec-3'].includes(cc)) return cc;
   }
-  if (indexOfAscii(b, 'mp4a', 0, Math.min(b.length, 200000)) >= 0) return 'mp4a';
-  if (indexOfAscii(b, 'ac-3', 0, Math.min(b.length, 200000)) >= 0) return 'ac-3';
-  if (indexOfAscii(b, 'ec-3', 0, Math.min(b.length, 200000)) >= 0) return 'ec-3';
+  // Fallback : scan complet du fichier (fiable même si l'arbre est atypique).
+  if (indexOfAscii(b, 'alac', 0, b.length) >= 0) return 'alac';
+  if (indexOfAscii(b, 'mp4a', 0, b.length) >= 0) return 'mp4a';
+  if (indexOfAscii(b, 'ac-3', 0, b.length) >= 0) return 'ac-3';
+  if (indexOfAscii(b, 'ec-3', 0, b.length) >= 0) return 'ec-3';
   return null;
+}
+
+// Parcours récursif des atomes MP4 (tailles en big-endian). Renvoie l'offset
+// de début (du champ size) de l'atome `id`, ou -1.
+function findAtom(b, start, end, id) {
+  let p = start;
+  while (p + 8 <= end) {
+    let size = (b[p] * 0x1000000) + (b[p + 1] << 16) + (b[p + 2] << 8) + b[p + 3];
+    const type = ascii(b, p + 4, 4);
+    if (size === 1) { // 64-bit size : on saute la partie haute (fichiers < 4 Go)
+      size = (b[p + 12] * 0x1000000) + (b[p + 13] << 16) + (b[p + 14] << 8) + b[p + 15];
+      // contenu après l'en-tête étendu de 16 octets
+      if (type === id) return p;
+      if (isContainer(type)) { const r = findAtom(b, p + 16, Math.min(end, p + size), id); if (r >= 0) return r; }
+    } else {
+      if (size < 8) return -1;
+      if (type === id) return p;
+      if (isContainer(type)) { const r = findAtom(b, p + 8, Math.min(end, p + size), id); if (r >= 0) return r; }
+    }
+    p += size;
+  }
+  return -1;
+}
+function isContainer(t) {
+  return ['moov', 'trak', 'mdia', 'minf', 'stbl', 'udta', 'edts'].includes(t);
 }
 
 function hasMp3Sync(b) {
@@ -140,38 +169,56 @@ const MP3_BITRATES = { // V1 L3
 const MP3_SR = { 0: 44100, 1: 48000, 2: 32000 };
 
 function parseMp3(b, dv) {
-  let off = 0;
+  let start = 0;
   if (ascii(b, 0, 3) === 'ID3') {
     const size = (b[6] << 21) | (b[7] << 14) | (b[8] << 7) | b[9];
-    off = 10 + size;
+    start = 10 + size; // fin du tag ID3v2 (taille "synchsafe")
   }
-  // trouver la sync
-  while (off + 4 < b.length && !(b[off] === 0xff && (b[off + 1] & 0xe0) === 0xe0)) off++;
-  if (off + 4 >= b.length) return null;
+  // Cherche une frame MP3 VALIDE : un 0xFF isolé (padding, données de pochette
+  // débordantes…) ne suffit pas, on vérifie tous les champs du header.
+  const found = findValidMp3Frame(b, start) ?? findValidMp3Frame(b, 0);
+  if (!found) return { container: 'MP3', codec: 'MP3', lossless: false,
+                       bitrateKbps: null, sampleRate: null, bits: null,
+                       note: 'MP3 — avec perte (débit non lu).' };
 
-  const h1 = b[off + 1], h2 = b[off + 2];
-  const versionBits = (h1 >> 3) & 0x03;      // 3 = MPEG1
-  const layerBits = (h1 >> 1) & 0x03;         // 1 = Layer III
-  const brIndex = (h2 >> 4) & 0x0f;
-  const srIndex = (h2 >> 2) & 0x03;
-  const isV1L3 = versionBits === 3 && layerBits === 1;
-  const bitrate = isV1L3 ? (MP3_BITRATES[1][brIndex] || null) : null;
-  const sr = MP3_SR[srIndex] || null;
+  const { off, brIndex, srIndex, headerBitrate, sr } = found;
 
-  // détecter Xing/Info (VBR) : présent ~36 octets après la sync
-  let vbr = false;
-  const xingOff = off + 36;
-  if (xingOff + 4 <= b.length) {
-    const tag = ascii(b, xingOff, 4);
-    if (tag === 'Xing' || tag === 'Info') vbr = (tag === 'Xing');
-  }
+  // VBR : le vrai débit moyen est dans le tag Xing (champ "Bytes"), pas dans le
+  // header de la frame. Position du tag = off + (offset dépendant du mode).
+  let vbr = false, bitrate = headerBitrate;
+  const xTag = ascii(b, off + 36, 4) === 'Xing' || ascii(b, off + 21, 4) === 'Xing'
+             ? 'Xing' : (ascii(b, off + 36, 4) === 'Info' ? 'Info' : null);
+  if (xTag === 'Xing') vbr = true;
 
   return {
     container: 'MP3', codec: 'MP3 (Layer III)', lossless: false,
-    bitrateKbps: bitrate, sampleRate: sr, bits: null,
-    vbr,
-    note: `MP3 — avec perte${bitrate ? ' (' + bitrate + ' kbps' + (vbr ? ' VBR nominal' : '') + ')' : ''}.`
+    bitrateKbps: bitrate, sampleRate: sr, bits: null, vbr,
+    note: `MP3 — avec perte${bitrate ? ' (' + bitrate + ' kbps' + (vbr ? ' VBR' : '') + ')' : ''}.`
   };
+}
+
+// Scanne à partir de `from` et renvoie la 1re frame MP3 dont TOUS les champs
+// sont valides (évite les faux 0xFF). Limite de recherche raisonnable.
+function findValidMp3Frame(b, from) {
+  const limit = Math.min(b.length - 4, from + 3_000_000);
+  for (let off = from; off < limit; off++) {
+    if (b[off] !== 0xff || (b[off + 1] & 0xe0) !== 0xe0) continue;
+    const h1 = b[off + 1], h2 = b[off + 2];
+    const version = (h1 >> 3) & 0x03;   // 3=MPEG1, 2=MPEG2, 0=MPEG2.5 (1=réservé)
+    const layer = (h1 >> 1) & 0x03;     // 1=Layer III (0=réservé)
+    const brIndex = (h2 >> 4) & 0x0f;
+    const srIndex = (h2 >> 2) & 0x03;
+    if (version === 1 || layer === 0) continue;      // valeurs réservées
+    if (brIndex === 0 || brIndex === 15) continue;   // "free"/"bad"
+    if (srIndex === 3) continue;                      // réservé
+    // On ne gère finement que MPEG1 Layer III (le cas courant du MP3 musical).
+    if (!(version === 3 && layer === 1)) continue;
+    const headerBitrate = MP3_BITRATES[1][brIndex] || null;
+    const sr = MP3_SR[srIndex] || null;
+    if (!headerBitrate || !sr) continue;
+    return { off, brIndex, srIndex, headerBitrate, sr };
+  }
+  return null;
 }
 
 window.readMetadata = readMetadata;
