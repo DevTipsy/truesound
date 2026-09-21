@@ -60,12 +60,12 @@ async function analyzeFile(file) {
   };
 
   try {
-    set('Lecture des métadonnées…');
+    set(T('card.reading'));
     const buf = await file.arrayBuffer();
     const meta = (typeof readMetadata === 'function')
       ? safe(() => readMetadata(buf, file.name)) : { unknown: true };
 
-    set('Décodage…');
+    set(T('card.decoding'));
     // decodeAudioData rééchantillonne au sample rate du CONTEXTE. Pour ne pas
     // écraser un Hi-Res (88,2/96/192 kHz) vers les 48 kHz de la carte son, on
     // décode dans un OfflineAudioContext calé sur le sample rate lu dans les
@@ -76,13 +76,13 @@ async function analyzeFile(file) {
     try {
       audio = await decodeAtRate(buf, metaSR);
     } catch (e) {
-      set("Impossible de décoder ce format dans ce navigateur (essaie Chrome pour le FLAC, ou WAV/M4A).", 'err');
+      set(T('card.decodeError'), 'err');
       return;
     }
     const sampleRate = audio.sampleRate;
     const nyquist = sampleRate / 2;
 
-    set('Analyse spectrale…');
+    set(T('card.analyzing'));
     const spectrum = await computeAverageSpectrum(audio);
 
     const cutoff = detectCutoff(spectrum, nyquist);
@@ -91,10 +91,12 @@ async function analyzeFile(file) {
     const fmax = maxFrequency(spectrum, nyquist);          // bande passante réelle (Hz)
     const verdict = classify(cutoff, nyquist, file, audio, hf, wall, meta);
 
-    fillResult(card, { file, audio, sampleRate, nyquist, cutoff, verdict, spectrum, meta, fmax });
+    const r = { file, audio, sampleRate, nyquist, cutoff, verdict, spectrum, meta, fmax };
+    analyzed.push({ card, r });
+    fillResult(card, r);
   } catch (err) {
     console.error(err);
-    set('Erreur : ' + err.message, 'err');
+    set(T('card.error') + ' : ' + err.message, 'err');
   }
 }
 
@@ -295,150 +297,66 @@ function classify(cutoff, nyquist, file, audio, hf, wall, meta) {
   meta = meta || { unknown: true };
 
   const bitrateNote = meta.bitrateKbps ? ` ${meta.bitrateKbps} kbps` : '';
-  const srNote = meta.sampleRate ? `${(meta.sampleRate/1000).toFixed(1)} kHz` : '';
+  const bitsNote = meta.bits ? ' ' + meta.bits + '-bit' : '';
+  const srNote = meta.sampleRate ? ' / ' + (meta.sampleRate/1000).toFixed(1) + ' kHz' : '';
 
-  // valeurs par défaut
-  let color, score, headline, fileType, audible, plain, warning = null;
-  let label, detail, likely; // rétro-compat (anciennes stats)
-
-  // Aide : construit le bloc explicatif = 1 phrase d'accroche + puces courtes.
-  const explain = (lead, bullets) =>
-    `<p class="lead">${lead}</p>` +
-    `<ul class="points">${bullets.map(b => `<li>${b}</li>`).join('')}</ul>`;
+  let color, score, headline, fileType, audible, warning = null;
 
   if (meta.lossless && hasWall) {
     // FAUX lossless : conteneur sans perte mais mur d'encodeur.
     color = 'red'; score = 0.3;
-    headline = '⚠️ Fausse qualité';
-    fileType = `${meta.codec} (annoncé sans perte)`;
-    audible = 'Qualité dégradée';
-    plain = explain(
-      `Ce fichier se présente comme du sans-perte, mais c'est un trompe-l'œil.`,
-      [
-        `Il a en réalité été fabriqué à partir d'un MP3 ou AAC compressé.`,
-        `Le son a déjà été abîmé, et le remettre dans un ${meta.codec} ne le répare pas.`,
-        `C'est le cas typique des faux téléchargements « HD ».`
-      ]
-    );
-    warning = `Mur d'encodeur détecté à ${wallK.toFixed(1)} kHz (chute de ${drop.toFixed(0)} dB), signature d'un lossy ré-encapsulé.`;
-    label = 'Faux lossless'; likely = `Lossy ré-encapsulé (mur ${wallK.toFixed(1)} kHz)`;
-    detail = plain;
+    headline = T('v.fake.head');
+    audible = T('v.fake.audible');
+    fileType = T('v.fake.type', { codec: meta.codec });
+    warning = T('v.fake.warn', { wall: wallK.toFixed(1), drop: drop.toFixed(0) });
   } else if (meta.lossless) {
     // VRAI sans-perte.
     const rich = hf > -32 && kHz >= 19.5;
     color = 'green'; score = rich ? 0.96 : 0.86;
-    headline = '✅ Qualité maximale';
-    fileType = `Sans perte — ${meta.codec}${meta.bits ? ' ' + meta.bits + '-bit' : ''}${srNote ? ' / ' + srNote : ''}`;
-    audible = 'La meilleure possible';
-    plain = rich
-      ? explain(
-          `C'est un vrai fichier sans perte.`,
-          [
-            `Aucune donnée audio n'a été jetée.`,
-            `C'est la qualité de référence : impossible de faire mieux.`,
-            `À l'oreille, la différence avec un bon MP3 ou AAC reste très subtile.`
-          ]
-        )
-      : explain(
-          `Vrai fichier sans perte, aucune trace de compression.`,
-          [
-            `Son contenu s'arrête vers ${kHz.toFixed(1)} kHz.`,
-            `C'est normal pour ce genre de musique, peu riche en aigus extrêmes.`,
-            `Ce n'est pas un défaut : la qualité reste celle de référence.`
-          ]
-        );
-    label = rich ? 'Lossless vérifié' : 'Lossless (aigus limités)';
-    likely = fileType; detail = plain;
+    headline = T('v.lossless.head');
+    audible = T('v.lossless.audible');
+    fileType = T('v.lossless.type', { codec: meta.codec, bits: bitsNote, sr: srNote });
   } else if (meta.unknown) {
     // Format non lu : on se rabat sur le spectre, prudemment.
     if (hasWall) {
-      color = wallK >= 19.5 ? 'orange' : 'red';
-      score = wallK >= 19.5 ? 0.55 : 0.3;
-      headline = wallK >= 19.5 ? '🟠 Correcte' : '🔴 Dégradée';
-      audible = wallK >= 19.5 ? 'Bonne' : 'Audiblement dégradée';
-      plain = explain(
-        `Format non identifié, mais le spectre parle.`,
-        [
-          `Une coupure de compression apparaît à ${wallK.toFixed(1)} kHz.`,
-          `C'est donc un fichier avec perte.`
-        ]
-      );
+      const good = wallK >= 19.5;
+      color = good ? 'orange' : 'red';
+      score = good ? 0.55 : 0.3;
+      headline = good ? T('v.unknownWall.headGood') : T('v.unknownWall.headBad');
+      audible = good ? T('v.unknownWall.audibleGood') : T('v.unknownWall.audibleBad');
     } else {
       color = 'orange'; score = 0.55;
-      headline = '❓ Indéterminé'; audible = 'Inconnue';
-      plain = explain(
-        `Verdict impossible pour ce fichier.`,
-        [
-          `Ses informations n'ont pas pu être lues.`,
-          `Le spectre ne montre aucun signe clair de compression.`
-        ]
-      );
+      headline = T('v.unknown.head');
+      audible = T('v.unknown.audible');
     }
-    fileType = 'Format non reconnu';
-    label = headline; likely = fileType; detail = plain;
+    fileType = T('v.unknown.type');
   } else {
     // LOSSY connu (MP3/AAC). La couleur suit l'AUDIBLE, pas le simple "lossy".
     const br = meta.bitrateKbps;
     const isAAC = meta.codec.startsWith('AAC');
-    fileType = `Avec perte — ${meta.codec}${bitrateNote}`;
-    likely = `${meta.codec}${bitrateNote}`;
+    fileType = T('type.lossy', { codec: meta.codec, br: bitrateNote });
 
     const transparent = isAAC || (br && br >= 256);
     const decent = br && br >= 192;
 
     if (transparent) {
       color = 'green'; score = 0.8;
-      headline = '✅ Excellente qualité';
-      audible = 'Indiscernable du sans-perte';
-      plain = isAAC
-        ? explain(
-            `Fichier compressé en AAC, typique d'un achat iTunes ou d'Apple Music.`,
-            [
-              `Techniquement ce n'est pas du « sans perte ».`,
-              `Mais à ce niveau, la différence est inaudible pour la quasi-totalité des gens, même sur bon matériel.`,
-              `Aucune raison de chercher mieux.`
-            ]
-          )
-        : explain(
-            `MP3 ${br} kbps, le haut de gamme du MP3.`,
-            [
-              `Le fichier est compressé.`,
-              `Mais la différence avec du sans-perte est inaudible en pratique.`
-            ]
-          );
-      label = isAAC ? 'Bon (AAC lossy)' : `Très bon (MP3 ${br})`;
+      headline = isAAC ? T('v.aac.head') : T('v.mp3hi.head');
+      audible = isAAC ? T('v.aac.audible') : T('v.mp3hi.audible');
     } else if (decent) {
       color = 'orange'; score = 0.5;
-      headline = '🟠 Qualité correcte';
-      audible = 'Bonne, légère perte possible';
-      plain = explain(
-        `MP3 ${br} kbps, correct pour une écoute courante.`,
-        [
-          `Une oreille attentive sur bon matériel peut percevoir une légère perte dans les aigus.`,
-          `Rien de gênant au quotidien.`
-        ]
-      );
-      label = 'Moyen';
+      headline = T('v.mp3mid.head');
+      audible = T('v.mp3mid.audible');
     } else {
       color = 'red'; score = Math.max(0.12, Math.min(0.32, (br || 128) / 320 * 0.35));
-      headline = '🔴 Qualité dégradée';
-      audible = 'Perte audible';
-      plain = explain(
-        `${meta.codec}${bitrateNote}, compression forte.`,
-        [
-          `La perte de qualité est audible : aigus étouffés.`,
-          `Des artefacts apparaissent sur les sons complexes.`,
-          `À éviter si tu as mieux disponible.`
-        ]
-      );
-      label = 'Basse qualité';
+      headline = T('v.mp3low.head');
+      audible = T('v.mp3low.audible');
     }
-    detail = plain;
   }
 
   return { color, score: Math.max(0, Math.min(1, score)),
-           headline, fileType, audible, plain, warning,
-           label, detail, likely, hf, wallK, wallDrop: drop, hasWall, meta, cutoffKHz: kHz };
+           headline, fileType, audible, warning,
+           hf, wallK, wallDrop: drop, hasWall, meta, cutoffKHz: kHz };
 }
 
 function safe(fn) { try { return fn(); } catch (e) { return { unknown: true }; } }
@@ -452,7 +370,7 @@ function renderCard(file) {
       <div class="fname">${escapeHtml(file.name)}</div>
       <div class="fmeta">${fmtSize(file.size)}</div>
     </div>
-    <div class="status">En attente…</div>`;
+    <div class="status">${T('card.waiting')}</div>`;
   results.prepend(el);
   return el;
 }
@@ -461,19 +379,16 @@ function fillResult(card, r) {
   const { verdict, cutoff, nyquist, sampleRate, audio, spectrum, file, meta, fmax } = r;
   const pct = (verdict.score * 100).toFixed(0);
   const m = meta || {};
-  const codecStr = m.unknown ? 'non lu' : (m.codec || m.container || '—');
-  const wallStr = verdict.hasWall ? `mur ${verdict.wallK.toFixed(1)} kHz` : 'aucun mur';
-  // Bande passante réelle vs maximum théorique (Nyquist). Sur un Hi-Res, la max
-  // réelle peut dépasser 22 kHz ; sinon elle plafonne au niveau CD.
+  const codecStr = m.unknown ? T('val.unread') : (m.codec || m.container || '—');
   const fmaxK = ((fmax || 0) / 1000).toFixed(1);
   const nyqK = (nyquist / 1000).toFixed(1);
   const hiRes = nyquist > 24500; // sample rate > 49 kHz -> Hi-Res décodé nativement
-  // Valeurs des 5 cartes — IDENTIQUES pour tous les fichiers, pour comparer
+  // Valeurs des cartes — IDENTIQUES pour tous les fichiers, pour comparer
   // d'un coup d'œil. Chaque carte a une pastille de couleur selon sa valeur.
-  const losslessCell = m.unknown ? { t: '—', c: '' }
-    : m.lossless ? (verdict.hasWall ? { t: 'Prétendu', c: 'red' } : { t: 'Oui', c: 'green' })
-    : { t: 'Non', c: 'orange' };
-  const wallCell = verdict.hasWall ? { t: `${verdict.wallK.toFixed(1)} kHz`, c: 'red' } : { t: 'Aucun', c: 'green' };
+  const losslessCell = m.unknown ? { t: T('val.unread'), c: '' }
+    : m.lossless ? (verdict.hasWall ? { t: T('val.claimed'), c: 'red' } : { t: T('val.yes'), c: 'green' })
+    : { t: T('val.no'), c: 'orange' };
+  const wallCell = verdict.hasWall ? { t: `${verdict.wallK.toFixed(1)} kHz`, c: 'red' } : { t: T('val.none'), c: 'green' };
 
   card.innerHTML = `
     <div class="card-head">
@@ -481,29 +396,40 @@ function fillResult(card, r) {
       <div class="fmeta">${fmtTime(audio.duration)} · ${fmtSize(file.size)}</div>
     </div>
 
-    <div class="headline ${verdict.color}">${verdict.headline}</div>
+    <div class="headline ${verdict.color}">${escapeHtml(verdict.headline)}</div>
 
     <div class="cardgrid">
-      <div class="cell"><span class="c-k">Qualité à l'oreille</span><span class="c-v ${verdict.color}">${escapeHtml(verdict.audible)}</span></div>
-      <div class="cell"><span class="c-k">Sans perte ?</span><span class="c-v ${losslessCell.c}">${losslessCell.t}</span></div>
-      <div class="cell"><span class="c-k">Codec</span><span class="c-v">${escapeHtml(codecStr)}</span></div>
-      <div class="cell"><span class="c-k">Débit / résolution</span><span class="c-v">${m.bitrateKbps ? m.bitrateKbps + ' kbps' : (m.bits ? m.bits + '-bit' : '—')}</span></div>
-      <div class="cell"><span class="c-k">Mur d'encodeur</span><span class="c-v ${wallCell.c}">${wallCell.t}</span></div>
-      <div class="cell"><span class="c-k">Fréq. max réelle</span><span class="c-v">${fmaxK} / ${nyqK} kHz${hiRes ? ' <b class="hires">Hi-Res</b>' : ''}</span></div>
+      <div class="cell"><span class="c-k">${T('cell.audible')}</span><span class="c-v ${verdict.color}">${escapeHtml(verdict.audible)}</span></div>
+      <div class="cell"><span class="c-k">${T('cell.lossless')}</span><span class="c-v ${losslessCell.c}">${escapeHtml(losslessCell.t)}</span></div>
+      <div class="cell"><span class="c-k">${T('cell.codec')}</span><span class="c-v">${escapeHtml(codecStr)}</span></div>
+      <div class="cell"><span class="c-k">${T('cell.bitrate')}</span><span class="c-v">${m.bitrateKbps ? m.bitrateKbps + ' kbps' : (m.bits ? m.bits + '-bit' : '—')}</span></div>
+      <div class="cell"><span class="c-k">${T('cell.wall')}</span><span class="c-v ${wallCell.c}">${escapeHtml(wallCell.t)}</span></div>
+      <div class="cell"><span class="c-k">${T('cell.fmax')}</span><span class="c-v">${fmaxK} / ${nyqK} kHz${hiRes ? ' <b class="hires">Hi-Res</b>' : ''}</span></div>
     </div>
 
     <div class="bar"><div class="marker" style="left:calc(${pct}% - 2px)"></div></div>
-    <div class="scale"><span>Perte audible</span><span>Bon</span><span>Qualité max</span></div>
+    <div class="scale"><span>${T('scale.low')}</span><span>${T('scale.mid')}</span><span>${T('scale.high')}</span></div>
 
-    ${verdict.warning ? `<div class="err">${verdict.warning}</div>` : ''}
+    ${verdict.warning ? `<div class="err">${escapeHtml(verdict.warning)}</div>` : ''}
 
     <canvas class="spec" width="800" height="130"></canvas>
-    <div class="spec-label">Énergie du son du grave (gauche) vers l'aigu (droite). Une chute brutale trahit une compression&nbsp;; un déclin doux jusqu'au bout = son intact.</div>
+    <div class="spec-label">${T('spec.label')}</div>
   `;
   const canvas = card.querySelector('.spec');
   if (canvas) drawSpectrum(canvas, spectrum, nyquist,
                verdict.hasWall ? verdict.wallK * 1000 : cutoff, verdict.color);
 }
+
+// Cache des analyses pour re-render au changement de langue (le verdict est
+// recalculé car classify() lit T(), qui dépend de la langue courante).
+const analyzed = [];
+document.addEventListener('ts-lang-changed', () => {
+  for (const { card, r } of analyzed) {
+    const v = classify(r.cutoff, r.nyquist, r.file, r.audio, r.verdict.hf,
+                       { atHz: r.verdict.wallK * 1000, dropDb: r.verdict.wallDrop }, r.meta);
+    fillResult(card, Object.assign({}, r, { verdict: v }));
+  }
+});
 
 function drawSpectrum(canvas, db, nyquist, cutoff, color) {
   const ctx = canvas.getContext('2d');
