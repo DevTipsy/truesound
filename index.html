@@ -76,6 +76,28 @@
   .badge.green { background: var(--green); }
   .verdict-text { font-size: 14px; color: var(--text); }
 
+  /* Verdict humain en gros */
+  .headline { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 14px 0 8px; }
+  .headline.green { color: var(--green); }
+  .headline.orange { color: var(--orange); }
+  .headline.red { color: var(--red); }
+  .plain { font-size: 14.5px; line-height: 1.55; color: var(--text); margin: 0 0 4px; }
+
+  /* Deux lignes : type de fichier / qualité à l'oreille */
+  .twoline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0 4px; }
+  .twoline > div { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+  .tl-k { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .tl-v { display: block; font-size: 14px; font-weight: 600; margin-top: 3px; }
+  @media (max-width: 520px) { .twoline { grid-template-columns: 1fr; } }
+
+  /* Bloc technique repliable */
+  .tech { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .tech summary { cursor: pointer; font-size: 13px; color: var(--muted); user-select: none; list-style: none; }
+  .tech summary::-webkit-details-marker { display: none; }
+  .tech summary::before { content: '▸ '; }
+  .tech[open] summary::before { content: '▾ '; }
+  .tech summary:hover { color: var(--text); }
+
   .bar { position: relative; height: 12px; border-radius: 999px; overflow: hidden; margin: 16px 0 6px;
     background: linear-gradient(90deg, var(--red) 0%, var(--red) 33%, var(--orange) 33%, var(--orange) 66%, var(--green) 66%, var(--green) 100%); }
   .bar .marker {
@@ -123,7 +145,7 @@
   </footer>
 </div>
 
-<script src="metadata.js?v=7"></script>
-<script src="analyzer.js?v=7"></script>
+<script src="metadata.js?v=8"></script>
+<script src="analyzer.js?v=8"></script>
 </body>
 </html>
