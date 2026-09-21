@@ -382,7 +382,7 @@ function safe(fn) { try { return fn(); } catch (e) { return { unknown: true }; }
 // --- Rendu --------------------------------------------------------------
 function renderCard(file) {
   const el = document.createElement('div');
-  el.className = 'card';
+  el.className = 'card glass';
   el.innerHTML = `
     <div class="card-head">
       <div class="fname">${escapeHtml(file.name)}</div>
