@@ -134,7 +134,14 @@
   .headline.green { color: var(--green); }
   .headline.orange { color: var(--orange); }
   .headline.red { color: var(--red); }
-  .plain { font-size: 15px; line-height: 1.6; color: var(--text); opacity: .92; margin: 0 0 4px; }
+  .plain { margin: 0 0 4px; }
+  .plain .lead { font-size: 15.5px; line-height: 1.55; color: var(--text); font-weight: 500; margin: 0 0 10px; letter-spacing: -0.01em; }
+  .plain .points { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+  .plain .points li { position: relative; padding-left: 22px; font-size: 14.5px; line-height: 1.5; color: var(--text); opacity: .9; }
+  .plain .points li::before {
+    content: ''; position: absolute; left: 4px; top: 8px; width: 6px; height: 6px;
+    border-radius: 50%; background: currentColor; opacity: .45;
+  }
 
   /* Deux lignes : type / qualité oreille */
   .twoline { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0 4px; }
@@ -208,7 +215,7 @@
   </footer>
 </div>
 
-<script src="metadata.js?v=9"></script>
-<script src="analyzer.js?v=9"></script>
+<script src="metadata.js?v=10"></script>
+<script src="analyzer.js?v=10"></script>
 </body>
 </html>

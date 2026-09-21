@@ -301,26 +301,53 @@ function classify(cutoff, nyquist, file, audio, hf, wall, meta) {
   let color, score, headline, fileType, audible, plain, warning = null;
   let label, detail, likely; // rétro-compat (anciennes stats)
 
+  // Aide : construit le bloc explicatif = 1 phrase d'accroche + puces courtes.
+  const explain = (lead, bullets) =>
+    `<p class="lead">${lead}</p>` +
+    `<ul class="points">${bullets.map(b => `<li>${b}</li>`).join('')}</ul>`;
+
   if (meta.lossless && hasWall) {
     // FAUX lossless : conteneur sans perte mais mur d'encodeur.
     color = 'red'; score = 0.3;
     headline = '⚠️ Fausse qualité';
     fileType = `${meta.codec} (annoncé sans perte)`;
     audible = 'Qualité dégradée';
-    plain = `Ce fichier se présente comme du sans-perte (${meta.codec}), mais il a été fabriqué à partir d'un MP3/AAC compressé : le son a déjà été abîmé, et le remettre dans un FLAC ne le répare pas. C'est le cas typique des faux téléchargements "HD".`;
-    warning = `Mur d'encodeur détecté à ${wallK.toFixed(1)} kHz (chute de ${drop.toFixed(0)} dB) : signature d'un lossy ré-encapsulé.`;
+    plain = explain(
+      `Ce fichier se présente comme du sans-perte, mais c'est un trompe-l'œil.`,
+      [
+        `Il a en réalité été fabriqué à partir d'un MP3 ou AAC compressé.`,
+        `Le son a déjà été abîmé, et le remettre dans un ${meta.codec} ne le répare pas.`,
+        `C'est le cas typique des faux téléchargements « HD ».`
+      ]
+    );
+    warning = `Mur d'encodeur détecté à ${wallK.toFixed(1)} kHz (chute de ${drop.toFixed(0)} dB), signature d'un lossy ré-encapsulé.`;
     label = 'Faux lossless'; likely = `Lossy ré-encapsulé (mur ${wallK.toFixed(1)} kHz)`;
     detail = plain;
   } else if (meta.lossless) {
     // VRAI sans-perte.
-    color = 'green'; score = (hf > -32 && kHz >= 19.5) ? 0.96 : 0.86;
+    const rich = hf > -32 && kHz >= 19.5;
+    color = 'green'; score = rich ? 0.96 : 0.86;
     headline = '✅ Qualité maximale';
     fileType = `Sans perte — ${meta.codec}${meta.bits ? ' ' + meta.bits + '-bit' : ''}${srNote ? ' / ' + srNote : ''}`;
     audible = 'La meilleure possible';
-    plain = (hf > -32 && kHz >= 19.5)
-      ? `C'est un vrai fichier sans perte : aucune donnée audio n'a été jetée. C'est la qualité de référence — impossible de faire mieux. (À l'oreille, la différence avec un bon MP3/AAC reste très subtile.)`
-      : `Vrai fichier sans perte (${meta.codec}), aucune trace de compression. Son contenu s'arrête vers ${kHz.toFixed(1)} kHz — c'est normal pour ce genre de musique (peu d'aigus extrêmes), pas un défaut. Qualité de référence.`;
-    label = (hf > -32 && kHz >= 19.5) ? 'Lossless vérifié' : 'Lossless (aigus limités)';
+    plain = rich
+      ? explain(
+          `C'est un vrai fichier sans perte.`,
+          [
+            `Aucune donnée audio n'a été jetée.`,
+            `C'est la qualité de référence : impossible de faire mieux.`,
+            `À l'oreille, la différence avec un bon MP3 ou AAC reste très subtile.`
+          ]
+        )
+      : explain(
+          `Vrai fichier sans perte, aucune trace de compression.`,
+          [
+            `Son contenu s'arrête vers ${kHz.toFixed(1)} kHz.`,
+            `C'est normal pour ce genre de musique, peu riche en aigus extrêmes.`,
+            `Ce n'est pas un défaut : la qualité reste celle de référence.`
+          ]
+        );
+    label = rich ? 'Lossless vérifié' : 'Lossless (aigus limités)';
     likely = fileType; detail = plain;
   } else if (meta.unknown) {
     // Format non lu : on se rabat sur le spectre, prudemment.
@@ -329,11 +356,23 @@ function classify(cutoff, nyquist, file, audio, hf, wall, meta) {
       score = wallK >= 19.5 ? 0.55 : 0.3;
       headline = wallK >= 19.5 ? '🟠 Correcte' : '🔴 Dégradée';
       audible = wallK >= 19.5 ? 'Bonne' : 'Audiblement dégradée';
-      plain = `Format non identifié, mais le spectre montre une coupure de compression à ${wallK.toFixed(1)} kHz — c'est un fichier avec perte.`;
+      plain = explain(
+        `Format non identifié, mais le spectre parle.`,
+        [
+          `Une coupure de compression apparaît à ${wallK.toFixed(1)} kHz.`,
+          `C'est donc un fichier avec perte.`
+        ]
+      );
     } else {
       color = 'orange'; score = 0.55;
       headline = '❓ Indéterminé'; audible = 'Inconnue';
-      plain = `Impossible de lire les infos de ce fichier et le spectre ne tranche pas. Verdict impossible.`;
+      plain = explain(
+        `Verdict impossible pour ce fichier.`,
+        [
+          `Ses informations n'ont pas pu être lues.`,
+          `Le spectre ne montre aucun signe clair de compression.`
+        ]
+      );
     }
     fileType = 'Format non reconnu';
     label = headline; likely = fileType; detail = plain;
@@ -344,7 +383,6 @@ function classify(cutoff, nyquist, file, audio, hf, wall, meta) {
     fileType = `Avec perte — ${meta.codec}${bitrateNote}`;
     likely = `${meta.codec}${bitrateNote}`;
 
-    // Seuil de transparence : AAC ≥ ~256 (implicite) ou MP3 ≥ 256 => quasi inaudible.
     const transparent = isAAC || (br && br >= 256);
     const decent = br && br >= 192;
 
@@ -353,20 +391,46 @@ function classify(cutoff, nyquist, file, audio, hf, wall, meta) {
       headline = '✅ Excellente qualité';
       audible = 'Indiscernable du sans-perte';
       plain = isAAC
-        ? `Fichier compressé en AAC (achat iTunes / Apple Music). Techniquement ce n'est pas du "sans perte", mais à ce niveau la différence est inaudible pour la quasi-totalité des gens, même sur bon matériel. Aucune raison de chercher mieux.`
-        : `MP3 ${br} kbps — le haut de gamme du MP3. Compressé, mais la différence avec du sans-perte est inaudible en pratique.`;
+        ? explain(
+            `Fichier compressé en AAC, typique d'un achat iTunes ou d'Apple Music.`,
+            [
+              `Techniquement ce n'est pas du « sans perte ».`,
+              `Mais à ce niveau, la différence est inaudible pour la quasi-totalité des gens, même sur bon matériel.`,
+              `Aucune raison de chercher mieux.`
+            ]
+          )
+        : explain(
+            `MP3 ${br} kbps, le haut de gamme du MP3.`,
+            [
+              `Le fichier est compressé.`,
+              `Mais la différence avec du sans-perte est inaudible en pratique.`
+            ]
+          );
       label = isAAC ? 'Bon (AAC lossy)' : `Très bon (MP3 ${br})`;
     } else if (decent) {
       color = 'orange'; score = 0.5;
       headline = '🟠 Qualité correcte';
       audible = 'Bonne, légère perte possible';
-      plain = `MP3 ${br} kbps — qualité correcte pour une écoute courante. Une oreille attentive sur bon matériel peut percevoir une légère perte sur les aigus, mais rien de gênant au quotidien.`;
+      plain = explain(
+        `MP3 ${br} kbps, correct pour une écoute courante.`,
+        [
+          `Une oreille attentive sur bon matériel peut percevoir une légère perte dans les aigus.`,
+          `Rien de gênant au quotidien.`
+        ]
+      );
       label = 'Moyen';
     } else {
       color = 'red'; score = Math.max(0.12, Math.min(0.32, (br || 128) / 320 * 0.35));
       headline = '🔴 Qualité dégradée';
       audible = 'Perte audible';
-      plain = `${meta.codec}${bitrateNote} — compression forte. La perte de qualité est audible : aigus étouffés, artefacts sur les sons complexes. À éviter si tu as mieux disponible.`;
+      plain = explain(
+        `${meta.codec}${bitrateNote}, compression forte.`,
+        [
+          `La perte de qualité est audible : aigus étouffés.`,
+          `Des artefacts apparaissent sur les sons complexes.`,
+          `À éviter si tu as mieux disponible.`
+        ]
+      );
       label = 'Basse qualité';
     }
     detail = plain;
@@ -411,7 +475,7 @@ function fillResult(card, r) {
     </div>
 
     <div class="headline ${verdict.color}">${verdict.headline}</div>
-    <p class="plain">${verdict.plain}</p>
+    <div class="plain">${verdict.plain}</div>
     ${verdict.warning ? `<div class="err">${verdict.warning}</div>` : ''}
 
     <div class="twoline">
