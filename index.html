@@ -134,24 +134,21 @@
   .headline.green { color: var(--green); }
   .headline.orange { color: var(--orange); }
   .headline.red { color: var(--red); }
-  .plain { margin: 0 0 4px; }
-  .plain .lead { font-size: 15.5px; line-height: 1.55; color: var(--text); font-weight: 500; margin: 0 0 10px; letter-spacing: -0.01em; }
-  .plain .points { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-  .plain .points li { position: relative; padding-left: 22px; font-size: 14.5px; line-height: 1.5; color: var(--text); opacity: .9; }
-  .plain .points li::before {
-    content: ''; position: absolute; left: 4px; top: 8px; width: 6px; height: 6px;
-    border-radius: 50%; background: currentColor; opacity: .45;
-  }
-
-  /* Deux lignes : type / qualité oreille */
-  .twoline { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0 4px; }
-  .twoline > div {
+  /* Grille de cartes UNIFORME (mêmes champs pour tous les fichiers) */
+  .cardgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0 4px; }
+  .cell {
     background: var(--card-inner); border: 1px solid var(--hairline);
-    border-radius: var(--radius-sm); padding: 13px 15px;
+    border-radius: var(--radius-sm); padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 5px; min-width: 0;
   }
-  .tl-k { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
-  .tl-v { display: block; font-size: 14.5px; font-weight: 600; margin-top: 4px; letter-spacing: -0.01em; }
-  @media (max-width: 520px) { .twoline { grid-template-columns: 1fr; } }
+  .c-k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+  .c-v { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+  .c-v.green { color: var(--green); }
+  .c-v.orange { color: var(--orange); }
+  .c-v.red { color: var(--red); }
+  .c-v .hires { color: var(--green); font-size: 11px; font-weight: 700; margin-left: 3px; vertical-align: middle; }
+  @media (max-width: 620px) { .cardgrid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 380px) { .cardgrid { grid-template-columns: 1fr; } }
 
   /* Barre de qualité */
   .bar {
@@ -166,20 +163,7 @@
   }
   .scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-weight: 500; }
 
-  /* Bloc technique repliable */
-  .tech { margin-top: 20px; border-top: 1px solid var(--hairline); padding-top: 14px; }
-  .tech summary { cursor: pointer; font-size: 13px; font-weight: 500; color: var(--muted); user-select: none; list-style: none; display: inline-flex; align-items: center; gap: 5px; }
-  .tech summary::-webkit-details-marker { display: none; }
-  .tech summary::before { content: '⌄'; transition: transform .2s; display: inline-block; }
-  .tech[open] summary::before { transform: rotate(180deg); }
-  .tech summary:hover { color: var(--text); }
-
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px,1fr)); gap: 12px; margin-top: 16px; }
-  .stat { background: var(--card-inner); border: 1px solid var(--hairline); border-radius: var(--radius-sm); padding: 12px 14px; }
-  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
-  .stat .v { font-size: 16px; font-weight: 600; margin-top: 3px; letter-spacing: -0.01em; }
-
-  canvas { width: 100%; height: 130px; margin-top: 16px; border-radius: var(--radius-sm); background: rgba(0,0,0,0.85); display: block; }
+  canvas { width: 100%; height: 120px; margin-top: 18px; border-radius: var(--radius-sm); background: rgba(0,0,0,0.85); display: block; }
   .spec-label { font-size: 11.5px; color: var(--muted); margin-top: 8px; text-align: center; line-height: 1.5; }
 
   .status { color: var(--muted); font-size: 14px; margin-top: 6px; display: inline-flex; align-items: center; gap: 8px; }
@@ -195,14 +179,14 @@
 <div class="wrap">
   <header>
     <h1>TrueSound<span class="dot">.</span></h1>
-    <p class="subtitle">La vraie qualité d'un fichier audio — pas ce que dit son étiquette.</p>
+    <p class="subtitle">La vraie qualité d'un fichier audio.<br>Pas ce que dit son étiquette.</p>
     <div class="privacy">🔒 Analyse 100&nbsp;% locale — aucun fichier n'est envoyé sur un serveur</div>
   </header>
 
   <label class="dropzone glass" id="drop">
     <div class="icon">🎵</div>
     <div class="big">Dépose un ou plusieurs fichiers, ou clique pour choisir</div>
-    <div class="small">FLAC, WAV, ALAC, M4A, MP3, AAC, OGG… — analysés dans ton navigateur</div>
+    <div class="small">FLAC, WAV, ALAC, M4A, MP3, AAC, OGG… analysés dans ton navigateur</div>
     <input type="file" id="file" accept="audio/*,.flac,.wav,.m4a,.mp3,.aac,.ogg,.opus" multiple>
   </label>
 
@@ -215,7 +199,7 @@
   </footer>
 </div>
 
-<script src="metadata.js?v=10"></script>
-<script src="analyzer.js?v=10"></script>
+<script src="metadata.js?v=11"></script>
+<script src="analyzer.js?v=11"></script>
 </body>
 </html>

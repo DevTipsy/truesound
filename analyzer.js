@@ -468,6 +468,13 @@ function fillResult(card, r) {
   const fmaxK = ((fmax || 0) / 1000).toFixed(1);
   const nyqK = (nyquist / 1000).toFixed(1);
   const hiRes = nyquist > 24500; // sample rate > 49 kHz -> Hi-Res décodé nativement
+  // Valeurs des 5 cartes — IDENTIQUES pour tous les fichiers, pour comparer
+  // d'un coup d'œil. Chaque carte a une pastille de couleur selon sa valeur.
+  const losslessCell = m.unknown ? { t: '—', c: '' }
+    : m.lossless ? (verdict.hasWall ? { t: 'Prétendu', c: 'red' } : { t: 'Oui', c: 'green' })
+    : { t: 'Non', c: 'orange' };
+  const wallCell = verdict.hasWall ? { t: `${verdict.wallK.toFixed(1)} kHz`, c: 'red' } : { t: 'Aucun', c: 'green' };
+
   card.innerHTML = `
     <div class="card-head">
       <div class="fname">${escapeHtml(file.name)}</div>
@@ -475,29 +482,23 @@ function fillResult(card, r) {
     </div>
 
     <div class="headline ${verdict.color}">${verdict.headline}</div>
-    <div class="plain">${verdict.plain}</div>
-    ${verdict.warning ? `<div class="err">${verdict.warning}</div>` : ''}
 
-    <div class="twoline">
-      <div><span class="tl-k">Type de fichier</span><span class="tl-v">${escapeHtml(verdict.fileType)}</span></div>
-      <div><span class="tl-k">Qualité à l'oreille</span><span class="tl-v">${escapeHtml(verdict.audible)}</span></div>
+    <div class="cardgrid">
+      <div class="cell"><span class="c-k">Qualité à l'oreille</span><span class="c-v ${verdict.color}">${escapeHtml(verdict.audible)}</span></div>
+      <div class="cell"><span class="c-k">Sans perte ?</span><span class="c-v ${losslessCell.c}">${losslessCell.t}</span></div>
+      <div class="cell"><span class="c-k">Codec</span><span class="c-v">${escapeHtml(codecStr)}</span></div>
+      <div class="cell"><span class="c-k">Débit / résolution</span><span class="c-v">${m.bitrateKbps ? m.bitrateKbps + ' kbps' : (m.bits ? m.bits + '-bit' : '—')}</span></div>
+      <div class="cell"><span class="c-k">Mur d'encodeur</span><span class="c-v ${wallCell.c}">${wallCell.t}</span></div>
+      <div class="cell"><span class="c-k">Fréq. max réelle</span><span class="c-v">${fmaxK} / ${nyqK} kHz${hiRes ? ' <b class="hires">Hi-Res</b>' : ''}</span></div>
     </div>
 
     <div class="bar"><div class="marker" style="left:calc(${pct}% - 2px)"></div></div>
     <div class="scale"><span>Perte audible</span><span>Bon</span><span>Qualité max</span></div>
 
-    <details class="tech">
-      <summary>Détails techniques &amp; courbe du son</summary>
-      <div class="stats">
-        <div class="stat"><div class="k">Codec réel</div><div class="v" style="font-size:15px">${escapeHtml(codecStr)}${m.bitrateKbps ? ' · ' + m.bitrateKbps + 'k' : ''}</div></div>
-        <div class="stat"><div class="k">Sans perte&nbsp;?</div><div class="v" style="font-size:15px">${m.unknown ? '?' : (m.lossless ? (verdict.hasWall ? '⚠️ prétendu' : '✅ oui') : '❌ non')}</div></div>
-        <div class="stat"><div class="k">Mur d'encodeur</div><div class="v" style="font-size:15px">${wallStr}</div></div>
-        <div class="stat"><div class="k">Fréq. max réelle</div><div class="v">${fmaxK} / ${nyqK} kHz${hiRes ? ' <span style="color:var(--green);font-size:12px">Hi-Res</span>' : ''}</div></div>
-      </div>
+    ${verdict.warning ? `<div class="err">${verdict.warning}</div>` : ''}
 
-      <canvas class="spec" width="800" height="130"></canvas>
-      <div class="spec-label">Énergie du son selon la fréquence (grave&nbsp;→&nbsp;aigu). Une <strong>chute brutale</strong> = compression ; un déclin doux jusqu'au bout = son intact. Pointillés = coupure détectée.</div>
-    </details>
+    <canvas class="spec" width="800" height="130"></canvas>
+    <div class="spec-label">Énergie du son du grave (gauche) vers l'aigu (droite). Une chute brutale trahit une compression&nbsp;; un déclin doux jusqu'au bout = son intact.</div>
   `;
   const canvas = card.querySelector('.spec');
   if (canvas) drawSpectrum(canvas, spectrum, nyquist,
