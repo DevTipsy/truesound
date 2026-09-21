@@ -86,12 +86,13 @@
   h1 .dot { color: var(--accent); -webkit-text-fill-color: var(--accent); }
   .subtitle { color: var(--muted); font-size: clamp(15px,4vw,18px); margin-top: 14px; font-weight: 450; max-width: 30ch; margin-left:auto; margin-right:auto; }
   .privacy {
-    display: inline-flex; align-items: center; gap: 7px;
-    margin-top: 20px; font-size: 13px; font-weight: 500; color: var(--green);
-    background: color-mix(in srgb, var(--green) 14%, transparent);
-    padding: 7px 15px; border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--green) 22%, transparent);
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 22px; font-size: 13px; font-weight: 500; color: var(--green);
+    background: color-mix(in srgb, var(--green) 12%, transparent);
+    padding: 8px 16px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--green) 20%, transparent);
   }
+  .privacy svg { flex-shrink: 0; opacity: .9; }
 
   /* ---- Verre : mixin visuel ---- */
   .glass {
@@ -173,6 +174,15 @@
 
   footer { margin-top: 48px; text-align: center; color: var(--faint); font-size: 12px; line-height: 1.8; max-width: 60ch; margin-left: auto; margin-right: auto; }
   footer code { background: var(--card-inner); border: 1px solid var(--hairline); padding: 1px 6px; border-radius: 6px; font-size: 11px; }
+  .foot-note { margin: 0; }
+  .foot-credit {
+    margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--hairline);
+    font-size: 13px; color: var(--muted); font-weight: 500;
+    display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+  }
+  .foot-credit a { color: var(--text); text-decoration: none; transition: color .15s; }
+  .foot-credit a:hover { color: var(--accent); }
+  .foot-credit .foot-sep { color: var(--faint); }
 </style>
 </head>
 <body>
@@ -180,7 +190,12 @@
   <header>
     <h1>TrueSound<span class="dot">.</span></h1>
     <p class="subtitle">La vraie qualité d'un fichier audio.<br>Pas ce que dit son étiquette.</p>
-    <div class="privacy">🔒 Analyse 100&nbsp;% locale — aucun fichier n'est envoyé sur un serveur</div>
+    <div class="privacy">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+      </svg>
+      Tout se passe dans votre navigateur. Aucun fichier n'est envoyé.
+    </div>
   </header>
 
   <label class="dropzone glass" id="drop">
@@ -193,9 +208,18 @@
   <div class="results" id="results"></div>
 
   <footer>
-    TrueSound détecte le <strong>mur de coupure spectral</strong> (lowpass) : un vrai lossless garde de l'énergie jusqu'à ~20&nbsp;kHz,
-    un MP3&nbsp;320 coupe vers ~20&nbsp;kHz, un MP3&nbsp;128 vers ~16&nbsp;kHz.<br>
-    Un fichier <code>.flac</code> qui coupe bas est un lossy déguisé (upsample).
+    <p class="foot-note">
+      TrueSound détecte le <strong>mur de coupure spectral</strong> (lowpass) : un vrai lossless garde de l'énergie jusqu'à ~20&nbsp;kHz,
+      un MP3&nbsp;320 coupe vers ~20&nbsp;kHz, un MP3&nbsp;128 vers ~16&nbsp;kHz.<br>
+      Un fichier <code>.flac</code> qui coupe bas est un lossy déguisé (upsample).
+    </p>
+    <p class="foot-credit">
+      Créé par <a href="https://github.com/DevTipsy/truesound" target="_blank" rel="noopener">DevTipsy</a>
+      <span class="foot-sep">·</span>
+      <a href="https://github.com/DevTipsy/truesound" target="_blank" rel="noopener">Code source</a>
+      <span class="foot-sep">·</span>
+      <a href="https://devtipsy.github.io/app-support/" target="_blank" rel="noopener">Support</a>
+    </p>
   </footer>
 </div>
 
