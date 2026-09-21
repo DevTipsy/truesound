@@ -66,13 +66,16 @@ async function analyzeFile(file) {
       ? safe(() => readMetadata(buf, file.name)) : { unknown: true };
 
     set('Décodage…');
-    const AC = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AC();
+    // decodeAudioData rééchantillonne au sample rate du CONTEXTE. Pour ne pas
+    // écraser un Hi-Res (88,2/96/192 kHz) vers les 48 kHz de la carte son, on
+    // décode dans un OfflineAudioContext calé sur le sample rate lu dans les
+    // métadonnées. Ainsi un FLAC 96 kHz garde ses aigus jusqu'à 48 kHz.
     let audio;
+    const metaSR = (meta && meta.sampleRate && meta.sampleRate >= 8000 && meta.sampleRate <= 384000)
+      ? meta.sampleRate : null;
     try {
-      audio = await ctx.decodeAudioData(buf.slice(0));
+      audio = await decodeAtRate(buf, metaSR);
     } catch (e) {
-      ctx.close();
       set("Impossible de décoder ce format dans ce navigateur (essaie Chrome pour le FLAC, ou WAV/M4A).", 'err');
       return;
     }
@@ -81,18 +84,40 @@ async function analyzeFile(file) {
 
     set('Analyse spectrale…');
     const spectrum = await computeAverageSpectrum(audio);
-    ctx.close();
 
     const cutoff = detectCutoff(spectrum, nyquist);
     const hf = highBandLevel(spectrum, nyquist);          // énergie 18–22 kHz vs corps (dB)
     const wall = wallSteepness(spectrum, nyquist, cutoff); // {dropDb, atHz} : mur artificiel ?
+    const fmax = maxFrequency(spectrum, nyquist);          // bande passante réelle (Hz)
     const verdict = classify(cutoff, nyquist, file, audio, hf, wall, meta);
 
-    fillResult(card, { file, audio, sampleRate, nyquist, cutoff, verdict, spectrum, meta });
+    fillResult(card, { file, audio, sampleRate, nyquist, cutoff, verdict, spectrum, meta, fmax });
   } catch (err) {
     console.error(err);
     set('Erreur : ' + err.message, 'err');
   }
+}
+
+// Décode le fichier en préservant le sample rate natif (targetRate lu dans les
+// métadonnées). Un OfflineAudioContext permet de fixer un sample rate arbitraire
+// jusqu'à 192 kHz, contrairement à l'AudioContext temps réel bloqué à celui de
+// la carte son. Fallback : contexte par défaut si le taux n'est pas accepté.
+async function decodeAtRate(buf, targetRate) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (targetRate && OAC) {
+    try {
+      // 1 frame suffit pour l'instancier ; on ne l'utilise que pour décoder.
+      const off = new OAC(1, 1, targetRate);
+      const audio = await off.decodeAudioData(buf.slice(0));
+      if (audio.sampleRate >= targetRate - 1) return audio; // taux préservé
+      // certains navigateurs rééchantillonnent quand même : on garde ce qu'on a
+      return audio;
+    } catch (e) { /* taux refusé -> fallback */ }
+  }
+  const ctx = new AC();
+  try { return await ctx.decodeAudioData(buf.slice(0)); }
+  finally { ctx.close(); }
 }
 
 // Spectre moyen : on prend le canal gauche, on fenêtre (Hann), FFT, on
@@ -180,6 +205,25 @@ function detectCutoff(db, nyquist) {
     }
   }
   return (cutoffBin / half) * nyquist; // Hz
+}
+
+// Fréquence la plus haute où le signal porte réellement de l'énergie (dernière
+// bande, en montant, encore au-dessus du plancher relatif). Sert à afficher la
+// bande passante réelle du morceau ("XX / max kHz") — utile pour repérer un vrai
+// Hi-Res (contenu au-delà de 22 kHz) vs un master qui plafonne au CD.
+function maxFrequency(db, nyquist) {
+  const half = db.length;
+  const win = 6;
+  const sm = k => {
+    let s = 0, c = 0;
+    for (let j = Math.max(0, k - win); j <= Math.min(half - 1, k + win); j++) { s += db[j]; c++; }
+    return s / c;
+  };
+  const floor = -70; // seuil relatif (le spectre est normalisé, max = 0 dB)
+  for (let k = half - 1; k >= 0; k--) {
+    if (sm(k) > floor) return (k / half) * nyquist;
+  }
+  return 0;
 }
 
 // Énergie moyenne de la bande haute (18–22 kHz) relative au corps du signal
@@ -345,11 +389,16 @@ function renderCard(file) {
 }
 
 function fillResult(card, r) {
-  const { verdict, cutoff, nyquist, sampleRate, audio, spectrum, file, meta } = r;
+  const { verdict, cutoff, nyquist, sampleRate, audio, spectrum, file, meta, fmax } = r;
   const pct = (verdict.score * 100).toFixed(0);
   const m = meta || {};
   const codecStr = m.unknown ? 'non lu' : (m.codec || m.container || '—');
   const wallStr = verdict.hasWall ? `mur ${verdict.wallK.toFixed(1)} kHz` : 'aucun mur';
+  // Bande passante réelle vs maximum théorique (Nyquist). Sur un Hi-Res, la max
+  // réelle peut dépasser 22 kHz ; sinon elle plafonne au niveau CD.
+  const fmaxK = ((fmax || 0) / 1000).toFixed(1);
+  const nyqK = (nyquist / 1000).toFixed(1);
+  const hiRes = nyquist > 24500; // sample rate > 49 kHz -> Hi-Res décodé nativement
   card.innerHTML = `
     <div class="card-head">
       <div class="fname">${escapeHtml(file.name)}</div>
@@ -370,7 +419,7 @@ function fillResult(card, r) {
       <div class="stat"><div class="k">Codec déclaré</div><div class="v" style="font-size:15px">${escapeHtml(codecStr)}${m.bitrateKbps ? ' · ' + m.bitrateKbps + 'k' : ''}</div></div>
       <div class="stat"><div class="k">Sans perte ?</div><div class="v" style="font-size:15px">${m.unknown ? '?' : (m.lossless ? (verdict.hasWall ? '⚠️ prétendu' : '✅ oui') : '❌ non')}</div></div>
       <div class="stat"><div class="k">Preuve spectrale</div><div class="v" style="font-size:15px">${wallStr}</div></div>
-      <div class="stat"><div class="k">Fréq. max théorique</div><div class="v">${(nyquist/1000).toFixed(1)} kHz</div></div>
+      <div class="stat"><div class="k">Fréq. max réelle</div><div class="v">${fmaxK} / ${nyqK} kHz${hiRes ? ' <span style="color:var(--green);font-size:12px">Hi-Res</span>' : ''}</div></div>
     </div>
 
     <canvas class="spec" width="800" height="130"></canvas>
